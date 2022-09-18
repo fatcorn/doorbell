@@ -1,4 +1,6 @@
 #![allow(clippy::integer_arithmetic)]
+
+use clap::ArgGroup;
 use {
     bip39::{Language, Mnemonic, MnemonicType, Seed},
     clap::{
@@ -14,8 +16,6 @@ use {
         },
         ArgConstant, DisplayError,
     },
-    solana_cli_config::{Config, CONFIG_FILE},
-    solana_remote_wallet::remote_wallet::RemoteWalletManager,
     solana_sdk::{
         instruction::{AccountMeta, Instruction},
         message::Message,
@@ -34,7 +34,9 @@ use {
         thread,
         time::Instant,
     },
+    doorbell_common::config::Config,
 };
+use doorbell_common::config::CONFIG_FILE;
 
 const NO_PASSPHRASE: &str = "";
 
@@ -134,7 +136,6 @@ fn check_for_overwrite(outfile: &str, matches: &ArgMatches) {
 fn get_keypair_from_matches(
     matches: &ArgMatches,
     config: Config,
-    wallet_manager: &mut Option<Arc<RemoteWalletManager>>,
 ) -> Result<Box<dyn Signer>, Box<dyn error::Error>> {
     let mut path = dirs_next::home_dir().expect("home directory");
     let path = if matches.is_present("keypair") {
@@ -142,10 +143,10 @@ fn get_keypair_from_matches(
     } else if !config.keypair_path.is_empty() {
         &config.keypair_path
     } else {
-        path.extend(&[".config", "solana", "id.json"]);
+        path.extend(&[".config", "doorbell", "id.json"]);
         path.to_str().unwrap()
     };
-    signer_from_path(matches, path, "pubkey recovery", wallet_manager)
+    signer_from_path(matches, path, "pubkey recovery", &mut None)
 }
 
 fn output_keypair(
@@ -333,7 +334,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let default_num_threads = num_cpus::get().to_string();
     let matches = App::new(crate_name!())
         .about(crate_description!())
-        .version(solana_version::version!())
+        .version("v0.1.0")
         .setting(AppSettings::SubcommandRequiredElseHelp)
         .arg({
             let arg = Arg::with_name("config_file")
@@ -394,6 +395,43 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 )
                 .key_generation_common_args()
                 .arg(no_outfile_arg())
+        )
+        .subcommand(
+            SubCommand::with_name("config")
+                .about("Config the data what node need")
+                .setting(AppSettings::DisableVersion)
+                .subcommand(
+                SubCommand::with_name("get")
+                    .about("Get current config settings"),
+                )
+                .subcommand(
+                    SubCommand::with_name("set")
+                        .about("Set a config setting")
+                        .arg(
+                            Arg::with_name("keypair")
+                                .long("keypair")
+                                .takes_value(true)
+                                .help("set keypair path"),
+                        )
+                        .arg(
+                            Arg::with_name("data")
+                                .long("data")
+                                .takes_value(true)
+                                .help("set data path"),
+                        )
+                        .arg(
+                            Arg::with_name("nick-name")
+                                .long("nick-name")
+                                .takes_value(true)
+                                .help("set nick-name for node"),
+                        )
+                        .arg(
+                            Arg::with_name("address")
+                                .long("address")
+                                .takes_value(true)
+                                .help("set address for node"),
+                        ),
+                )
         )
         .subcommand(
             SubCommand::with_name("grind")
@@ -532,12 +570,10 @@ fn do_main(matches: &ArgMatches<'_>) -> Result<(), Box<dyn error::Error>> {
         Config::default()
     };
 
-    let mut wallet_manager = None;
-
     match matches.subcommand() {
         ("pubkey", Some(matches)) => {
             let pubkey =
-                get_keypair_from_matches(matches, config, &mut wallet_manager)?.try_pubkey()?;
+                get_keypair_from_matches(matches, config)?.try_pubkey()?;
 
             if matches.is_present("outfile") {
                 let outfile = matches.value_of("outfile").unwrap();
@@ -547,6 +583,44 @@ fn do_main(matches: &ArgMatches<'_>) -> Result<(), Box<dyn error::Error>> {
                 println!("{}", pubkey);
             }
         }
+
+        ("config", Some(matches)) => {
+            let mut config = config;
+
+            match matches.subcommand() {
+                ("get", Some(_)) => {
+                    println!("keypair_path: {}", config.keypair_path);
+                    println!("data_path: {}", config.data_path);
+                    println!("nick_name: {}", config.nick_name);
+                    println!("address: {}", config.address);
+                }
+                ("set", Some(subcommand_matches)) => {
+                    println!("{:?}", subcommand_matches);
+                    if let Some(keypair_path) = subcommand_matches.value_of("keypair") {
+                       config.keypair_path = keypair_path.to_string();
+                    }
+                    if let Some(data_path) = subcommand_matches.value_of("data") {
+                        config.data_path = data_path.to_string();
+                    }
+                    if let Some(nick_name) = subcommand_matches.value_of("nick-name") {
+                        println!("set nick-name");
+                        config.nick_name = nick_name.to_string();
+                    }
+                    if let Some(address) = subcommand_matches.value_of("address") {
+                        config.address = address.to_string();
+                    }
+
+                    let config_file = matches.value_of("config_file").unwrap();
+                    config.save(config_file)?;
+                    println!("keypair_path: {}", config.keypair_path);
+                    println!("data_path: {}", config.data_path);
+                    println!("nick_name: {}", config.nick_name);
+                    println!("address: {}", config.address);
+                }
+                _ => {}
+            }
+        }
+
         ("new", Some(matches)) => {
             let mut path = dirs_next::home_dir().expect("home directory");
             let outfile = if matches.is_present("outfile") {
@@ -554,7 +628,7 @@ fn do_main(matches: &ArgMatches<'_>) -> Result<(), Box<dyn error::Error>> {
             } else if matches.is_present(NO_OUTFILE_ARG.name) {
                 None
             } else {
-                path.extend(&[".config", "solana", "id.json"]);
+                path.extend(&[".config", "doorbell", "id.json"]);
                 Some(path.to_str().unwrap())
             };
 
@@ -767,7 +841,7 @@ fn do_main(matches: &ArgMatches<'_>) -> Result<(), Box<dyn error::Error>> {
             }
         }
         ("verify", Some(matches)) => {
-            let keypair = get_keypair_from_matches(matches, config, &mut wallet_manager)?;
+            let keypair = get_keypair_from_matches(matches, config)?;
             let simple_message = Message::new(
                 &[Instruction::new_with_bincode(
                     Pubkey::default(),

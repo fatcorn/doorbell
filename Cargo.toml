@@ -1,8 +1,10 @@
 [workspace]
 members = [
     "natbreak/sniffer",
+    "natbreak/breaker",
     "natbreak/test_async",
-    "natbreak/sniffer-helper"
+    "natbreak/sniffer-helper",
+    "natbreak/objdump_observer"
 ]
 
 

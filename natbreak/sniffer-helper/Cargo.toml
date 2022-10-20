@@ -9,3 +9,8 @@ edition = "2021"
 crossbeam-channel = "0.5.6"
 borsh = "0.9.3"
 lazy_static = "1.4.0"
+sniffer = {path = "../sniffer", version = "0.1.0"}
+serde_yaml = "0.9.1"
+serde_derive = "1.0.143"
+serde = "1.0.144"
+dirs-next = "2.0.0"

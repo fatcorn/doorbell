@@ -1,19 +1,30 @@
+mod config;
+
 use std::net::{SocketAddr, UdpSocket};
+use std::net::SocketAddr::V4;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use crossbeam_channel::{tick, unbounded};
+use crossbeam_channel::{unbounded};
 use borsh::{BorshSerialize, BorshDeserialize};
 use lazy_static::lazy_static;
+use sniffer::nat_type_sniffer::{Request, Response};
+use config::{Config, CONFIG_FILE};
 
 #[derive(Clone, Debug, PartialEq, BorshDeserialize, BorshSerialize)]
 struct Seeker {
     addr: SocketAddr
 }
-const PONG: &[u8] = "PONG".as_bytes();
+
 
 lazy_static!{
-    pub static ref ASSISTANT: SocketAddr = SocketAddr::new("127.0.0.1".parse().unwrap(), 9527);
+
+    static ref assistant_ip: String = {
+        let config = Config::load((*CONFIG_FILE).clone().unwrap());
+        config.unwrap().assistant_ip
+    };
+
+    pub static ref ASSISTANT: SocketAddr = SocketAddr::new(assistant_ip.parse().unwrap(), 9527);
 }
 
 
@@ -32,7 +43,9 @@ fn main() {
         let socket = UdpSocket::bind("0.0.0.0:7777").unwrap();
         loop {
             let addr = port_transmit_rx.recv().unwrap();
-            socket.send_to(PONG, addr);
+            let rep = Response::Pong;
+            let rep_data = borsh::to_vec(&rep).unwrap();
+            socket.send_to(rep_data.as_slice(), addr);
         }
     });
 
@@ -50,8 +63,9 @@ fn main() {
                 if seeker.is_err() {
                     continue
                 }
-
-                socket.send_to(PONG, seeker.unwrap().addr);
+                let rep = Response::Pong;
+                let rep_data = borsh::to_vec(&rep).unwrap();
+                socket.send_to(rep_data.as_slice(), seeker.unwrap().addr);
             }
         });
     });
@@ -61,14 +75,11 @@ fn main() {
     thread::spawn(|| {
         let _ =  thread::spawn(move || {
             println!("enter self response thread");
-            let ticker = tick(Duration::from_secs(15));
             loop {
-                ticker.recv();
-                let chan_len = self_response_rx.len();
-                for _ in  0..chan_len {
-                    let addr = self_response_rx.recv().unwrap();
-                    self_socket.send_to(PONG, addr);
-                }
+                let ret: (Response, SocketAddr) = self_response_rx.recv().unwrap();
+                let (response, addr) = ret;
+                let rep_data = borsh::to_vec(&response).unwrap();
+                self_socket.send_to(rep_data.as_slice(), addr);
             }
         });
     });
@@ -77,20 +88,33 @@ fn main() {
         let mut buf = [0u8; 1500];
         let (rsz, src) = socket.recv_from(&mut buf).unwrap();
         let buf = &mut buf[..rsz];
-        println!("get {} address from {:?}", String::from_utf8(buf.to_vec()).unwrap(), src);
-        let data = String::from_utf8(buf.to_vec()).unwrap();
-        if data != "ping" {
+        println!("get {:?} address from {:?}", buf, src);
+        let req: Result<Request, _> = Request::deserialize(&mut &buf[..rsz]);
+        if req.is_err(){
             continue
         }
-        // 本机不同端口转发
-        port_transmit_tx.send( src);
+        match req.unwrap() {
+            Request::Ping =>  {
+                // 本机不同端口转发
+                port_transmit_tx.send( src);
 
-        // 助手转发转发
-        let seeker = Seeker { addr: src.clone() };
-        let seeker_data = borsh::to_vec(&seeker).unwrap();
-        socket.send_to(seeker_data.as_slice(), *ASSISTANT);
+                // 助手转发转发
+                let seeker = Seeker { addr: src.clone() };
+                let seeker_data = borsh::to_vec(&seeker).unwrap();
+                socket.send_to(seeker_data.as_slice(), *ASSISTANT);
 
-        // 后续自主发起响应
-        self_response_tx.send(src.clone());
+                // 后续自主发起响应
+                let rep = Response::Pong;
+                self_response_tx.send((rep, src.clone()));
+            }
+
+            Request::AddressCheck => {
+                let rep;
+                if let SocketAddr::V4(addr) = src {
+                    rep = Response::CheckPong {addr};
+                } else { panic!() }
+                self_response_tx.send((rep, src.clone()));
+            }
+        }
     }
 }

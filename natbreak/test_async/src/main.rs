@@ -1,5 +1,5 @@
-#![feature(core_intrinsics)]
-#![feature(layout_for_ptr)]
+// #![feature(core_intrinsics)]
+// #![feature(layout_for_ptr)]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 extern crate core;
@@ -48,11 +48,12 @@ async fn hello_world() -> String {
 
 pub mod tests {
     use std::collections::HashMap;
-    use std::intrinsics::size_of_val;
+    // use std::intrinsics::size_of_val;
     use std::thread::sleep;
     use std::time::Duration;
     use std::mem;
-    use std::mem::{size_of};
+    use std::mem::{size_of, size_of_val};
+    use std::ptr::NonNull;
     use dashmap::DashMap;
     use rand::distributions::Alphanumeric;
     use rand::{Rng, thread_rng};
@@ -79,11 +80,22 @@ pub mod tests {
         println!("empty_vec spend space {}", size_of::<()>());
     }
 
+    pub struct Bucket<T> {
+        // Actually it is pointer to next element than element itself
+        // this is needed to maintain pointer arithmetic invariants
+        // keeping direct pointer to element introduces difficulty.
+        // Using `NonNull` for variance and niche layout
+        ptr: NonNull<T>,
+    }
+
     #[test]
     fn hash_map_spend_space() {
         let _profiler = dhat::Profiler::builder().testing().build();
+        println!("hash map bucket len {}", size_of::<Bucket<i64>>());
         let mut map = HashMap::new();
-        for i in 0..8 {
+        println!("hash map bucket len {}", size_of::<Bucket<i32>>());
+        println!("hash map bucket len {}", size_of::<Bucket<i32>>());
+        for i in 0..1000000 {
             let mut rand_string: Vec<u8> = thread_rng()
                 .sample_iter(&Alphanumeric)
                 .take(32)
@@ -100,6 +112,7 @@ pub mod tests {
         println!("sleep");
         // sleep(Duration::from_secs(1));
         println!("map size {} ", map.len());
+        println!("map cap {} ", map.capacity());
 
 
         unsafe {

@@ -75,7 +75,7 @@ pub fn breaker() -> bool{
             println!("local addr {} send to {}", local_addr , other_address);
             socket.send_to(msg_data.as_slice(), other_address.clone());
             n -= 1;
-            // sleep(Duration::from_secs(1));
+            sleep(Duration::from_millis(1));
         }
 
         loop {
@@ -94,7 +94,7 @@ pub fn breaker() -> bool{
                 Message::BreakPing => {
                     let break_ping_msg = Message::BreakPong;
                     let msg_data = borsh::to_vec(&break_ping_msg).unwrap();
-                    println!("get msg pong from {}", addr);
+                    println!("get msg ping from {}", addr);
                     socket.send_to(msg_data.as_slice(), other_address);
                     sleep(Duration::from_secs(1));
                 }
@@ -193,9 +193,98 @@ pub fn breaker_with_diff_nat() -> bool{
     true
 }
 
+/// 端口轮换穿透，不同网络中的穿透
+pub fn break_with_guess() -> bool{
+    // todo 暂时供测试使用
+    let socket = UdpSocket::bind("0.0.0.0:6666").unwrap();
+    let target_addr = SocketAddrV4::new(Ipv4Addr::new(141, 164, 51, 24), 6666);
+    let (break_target_addr_tx, break_target_addr_rx) = bounded(0);
+
+    let req = Request::AddressCheck;
+    let req_data = borsh::to_vec(&req).unwrap();
+    socket.send_to(req_data.as_slice(), target_addr);
+
+    let arc_socket = Arc::new(socket);
+    let arc_socket_clone1 = arc_socket.clone();
+    let arc_socket_clone2 = arc_socket.clone();
+    let send_task = thread::spawn(move || {
+        let mut target_addr: SocketAddrV4  = break_target_addr_rx.recv().unwrap();
+        println!("start send break ping to {}", target_addr);
+        let mut port = 1;
+        let mut port_increase_direction = true;
+        loop {
+            target_addr.set_port(port);
+            // println!("start send break ping to {}", target_addr);
+            let break_ping_msg = Message::BreakPing;
+            let msg_data = borsh::to_vec(&break_ping_msg).unwrap();
+            arc_socket_clone1.send_to(msg_data.as_slice(), target_addr.clone());
+            sleep(Duration::from_millis(1));
+            if port_increase_direction {
+                port += 1;
+            } else {
+                port -= 1;
+            }
+
+            if port == 1 {
+                port_increase_direction = true;
+            }
+            if port == 65535 {
+                port_increase_direction = false;
+            }
+        }
+    });
+
+    let recev_task = thread::spawn(move || {
+        loop {
+            println!("start rev msg");
+            let mut buf = [0u8; 1500];
+            let (rec_size, addr) = arc_socket_clone2.recv_from(&mut buf).unwrap();
+            let msg : Message = Message::deserialize(&mut &buf[..rec_size]).unwrap();
+            match msg {
+                Message::BreakPong => {
+                    println!("get msg pong from {}", addr);
+                }
+
+                Message::BreakPing => {
+                    let break_pong_msg = Message::BreakPong;
+                    let msg_data = borsh::to_vec(&break_pong_msg).unwrap();
+                    println!("get msg ping from {}", addr);
+                    arc_socket_clone2.send_to(msg_data.as_slice(), addr);
+                    sleep(Duration::from_secs(1));
+                }
+            }
+        }
+    });
+
+    let read_task = thread::spawn(move || {
+        loop {
+            let file = File::open("/root/break_addr");
+            if file.is_err() {
+                sleep(Duration::from_secs(1));
+                continue
+            }
+
+            let mut file = file.unwrap();
+            let mut addr= String::new();
+            let _ = file.read_to_string(&mut addr);
+            let addr = addr.replace("\n", "");
+            let socket_addr = SocketAddrV4::from_str(&addr).unwrap();
+            break_target_addr_tx.send(socket_addr);
+            break;
+        }
+    });
+
+
+    send_task.join();
+    recev_task.join();
+    read_task.join();
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::breaker::{breaker, breaker_with_diff_nat};
+    use crate::breaker::{break_with_guess, breaker, breaker_with_diff_nat};
 
     #[test]
     fn test_breaker() {
@@ -205,5 +294,10 @@ mod tests {
     #[test]
     fn test_diff_nat_breaker() {
         breaker_with_diff_nat();
+    }
+
+    #[test]
+    fn test_break_with_guess() {
+        break_with_guess();
     }
 }

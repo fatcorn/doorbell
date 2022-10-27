@@ -4,7 +4,8 @@ members = [
     "natbreak/breaker",
     "natbreak/test_async",
     "natbreak/sniffer-helper",
-    "natbreak/objdump_observer"
+    "natbreak/objdump_observer",
+    "iced-test/game_of_life"
 ]
 
 
